@@ -182,7 +182,13 @@ export const StudentPage: React.FC = () => {
         })
       });
 
-      const data = await response.json();
+      const resText = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(resText);
+      } catch (pErr) {
+        throw new Error(`서버 응답 파싱 실패 (${response.status}): ${resText.slice(0, 150) || '응답이 비어있습니다.'}`);
+      }
 
       if (!data.success) {
         throw new Error(data.error || 'Gemini API 응답 오류');

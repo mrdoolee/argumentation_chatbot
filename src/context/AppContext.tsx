@@ -8,6 +8,7 @@ import {
 } from '../lib/googleAuth';
 import {
   ensureSpreadsheetExists,
+  ensureDriveFoldersExist,
   fetchEnvConfig,
   fetchBaseConfig,
   fetchRubricConfig,
@@ -102,7 +103,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchChatRecords(token, sheetId)
       ]);
 
-      setEnvConfig(env);
+      const finalEnv = await ensureDriveFoldersExist(token, sheetId, env);
+
+      setEnvConfig(finalEnv);
       setBaseConfig(base);
       setRubricConfig(rubric);
       setChatRecords(records);

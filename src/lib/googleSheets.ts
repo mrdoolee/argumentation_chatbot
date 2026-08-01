@@ -114,6 +114,8 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
     return getLocalDatabase().spreadsheetId;
   }
 
+  let spreadsheetId = '';
+
   // 1. Search for existing spreadsheet file in Google Drive
   const qStr = encodeURIComponent(`name = '${DATABASE_FILENAME}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`);
   const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${qStr}&fields=files(id,name)`;
@@ -130,7 +132,7 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
   if (searchRes.ok) {
     const searchData = await searchRes.json();
     if (searchData.files && searchData.files.length > 0) {
-      return searchData.files[0].id;
+      spreadsheetId = searchData.files[0].id;
     }
   } else {
     const errJson = await searchRes.json().catch(() => ({}));
@@ -145,78 +147,130 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
   }
 
   // 2. File not found -> Create new spreadsheet via Sheets API v4
-  const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
-  const payload = {
-    properties: { title: DATABASE_FILENAME }
-  };
+  if (!spreadsheetId) {
+    const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
+    const payload = {
+      properties: { title: DATABASE_FILENAME },
+      sheets: [
+        { properties: { title: '환경설정' } },
+        { properties: { title: '기본설정' } },
+        { properties: { title: '채팅기록' } },
+        { properties: { title: '논증평가설정' } },
+        { properties: { title: '대시보드' } }
+      ]
+    };
 
-  let createRes: Response;
-  try {
-    createRes = await fetch(createUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-  } catch (netErr: any) {
-    throw new Error(`Google Sheets 생성 통신 실패 (${netErr.message || 'Failed to fetch'}). 인증 토큰이 만료되었거나 네트워크/광고차단기 차단 여부를 확인해 주세요.`);
+    let createRes: Response;
+    try {
+      createRes = await fetch(createUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (netErr: any) {
+      throw new Error(`Google Sheets 생성 통신 실패 (${netErr.message || 'Failed to fetch'}). 인증 토큰이 만료되었거나 네트워크/광고차단기 차단 여부를 확인해 주세요.`);
+    }
+
+    if (!createRes.ok) {
+      const errJson = await createRes.json().catch(() => ({}));
+      const errMsg = errJson.error?.message || errJson.message || createRes.statusText || '알 수 없는 오류';
+
+      if (createRes.status === 401) {
+        throw new Error(`구글 로그인 인증 토큰이 만료되었습니다. [Google 로그인] 버튼을 다시 눌러 로그인 후 시도해 주세요.`);
+      }
+      if (createRes.status === 403) {
+        throw new Error(`Google Sheets API 권한 오류(403): ${errMsg}. Google Cloud Console에서 'Google Sheets API'가 사용 설정(Enable)되었는지 확인해 주세요.`);
+      }
+      throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
+    }
+
+    const newSheet = await createRes.json();
+    spreadsheetId = newSheet.spreadsheetId;
   }
 
-  if (!createRes.ok) {
-    const errJson = await createRes.json().catch(() => ({}));
-    const errMsg = errJson.error?.message || errJson.message || createRes.statusText || '알 수 없는 오류';
-
-    if (createRes.status === 401) {
-      throw new Error(`구글 로그인 인증 토큰이 만료되었습니다. [Google 로그인] 버튼을 다시 눌러 로그인 후 시도해 주세요.`);
-    }
-    if (createRes.status === 403) {
-      throw new Error(`Google Sheets API 권한 오류(403): ${errMsg}. Google Cloud Console에서 'Google Sheets API'가 사용 설정(Enable)되었는지 확인해 주세요.`);
-    }
-    throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
-  }
-
-  const newSheet = await createRes.json();
-  const spreadsheetId = newSheet.spreadsheetId;
-
-  // 3. Populate default tabs and initial values
+  // 3. Guarantee all 5 tabs exist and populate initial content if empty
   if (spreadsheetId) {
     try {
-      await initializeSpreadsheetTabs(token, spreadsheetId);
+      await ensureSpreadsheetStructure(token, spreadsheetId);
     } catch (tabErr: any) {
-      console.warn("Initialize tabs warning:", tabErr);
+      console.warn("Ensure structure warning:", tabErr);
     }
   }
 
   return spreadsheetId;
 }
 
-async function initializeSpreadsheetTabs(token: string, spreadsheetId: string) {
-  // 1. Add required sheets
-  const addSheetsUrl = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}:batchUpdate`;
+export async function ensureSpreadsheetStructure(token: string, spreadsheetId: string) {
+  if (!token || !spreadsheetId || spreadsheetId === 'local_demo_sheet_id') return;
+
+  // 1. Fetch current sheets metadata
+  const metaUrl = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}?fields=sheets(properties(sheetId,title))`;
+  let sheetsMeta: any[] = [];
   try {
-    await fetch(addSheetsUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        requests: [
-          { addSheet: { properties: { title: '환경설정' } } },
-          { addSheet: { properties: { title: '기본설정' } } },
-          { addSheet: { properties: { title: '채팅기록' } } },
-          { addSheet: { properties: { title: '논증평가설정' } } },
-          { addSheet: { properties: { title: '대시보드' } } }
-        ]
-      })
-    });
+    const metaRes = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (metaRes.ok) {
+      const metaData = await metaRes.json();
+      sheetsMeta = metaData.sheets || [];
+    }
   } catch (e) {
-    console.warn("Add sheets batchUpdate warning:", e);
+    console.warn("Fetch metadata warning:", e);
   }
 
-  // 2. Populate initial values
+  const existingTitles = sheetsMeta.map((s: any) => s.properties?.title);
+  const requiredTitles = ['환경설정', '기본설정', '채팅기록', '논증평가설정', '대시보드'];
+  const missingTitles = requiredTitles.filter((t) => !existingTitles.includes(t));
+
+  const requests: any[] = [];
+  missingTitles.forEach((title) => {
+    requests.push({ addSheet: { properties: { title } } });
+  });
+
+  // Delete default sheet like "시트1" or "Sheet1" if custom tabs exist
+  const defaultSheet = sheetsMeta.find((s: any) => s.properties?.title === '시트1' || s.properties?.title === 'Sheet1');
+  if (defaultSheet && (existingTitles.length > 1 || missingTitles.length > 0)) {
+    requests.push({ deleteSheet: { sheetId: defaultSheet.properties.sheetId } });
+  }
+
+  if (requests.length > 0) {
+    const batchUrl = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}:batchUpdate`;
+    try {
+      await fetch(batchUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ requests })
+      });
+    } catch (e) {
+      console.warn("BatchUpdate structure warning:", e);
+    }
+  }
+
+  // 2. Check if initial content is needed in '환경설정'
+  const checkUrl = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}/values/${encodeURIComponent('환경설정!A1:A1')}`;
+  let needsInitialData = true;
+  try {
+    const checkRes = await fetch(checkUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (checkRes.ok) {
+      const checkData = await checkRes.json();
+      if (checkData.values && checkData.values.length > 0 && checkData.values[0][0]) {
+        needsInitialData = false;
+      }
+    }
+  } catch (e) {
+    console.warn("Check initial data warning:", e);
+  }
+
+  if (needsInitialData) {
+    await populateInitialData(token, spreadsheetId);
+  }
+}
+
+async function populateInitialData(token: string, spreadsheetId: string) {
   const envData = [
     ['Gemini API Key', DEFAULT_ENV_CONFIG.geminiApiKey],
     ['자료 공유 폴더 ID', DEFAULT_ENV_CONFIG.folderId],
@@ -285,6 +339,79 @@ async function initializeSpreadsheetTabs(token: string, spreadsheetId: string) {
 }
 
 /**
+ * Creates Google Drive folders if they don't exist and links their IDs.
+ */
+export async function ensureDriveFoldersExist(token: string, spreadsheetId: string, currentEnv: EnvConfig): Promise<EnvConfig> {
+  if (!token || spreadsheetId === 'local_demo_sheet_id') return currentEnv;
+
+  let newEnv = { ...currentEnv };
+  let updated = false;
+
+  const getOrCreateFolder = async (folderName: string): Promise<string> => {
+    // Search existing folder
+    const qStr = encodeURIComponent(`name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${qStr}&fields=files(id,name)`;
+    try {
+      const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (searchRes.ok) {
+        const data = await searchRes.json();
+        if (data.files && data.files.length > 0) {
+          return data.files[0].id;
+        }
+      }
+    } catch (e) {
+      console.warn("Search folder warning:", e);
+    }
+
+    // Create new folder
+    const createUrl = 'https://www.googleapis.com/drive/v3/files';
+    const createRes = await fetch(createUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder'
+      })
+    });
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || createRes.statusText);
+    }
+    const createData = await createRes.json();
+    return createData.id;
+  };
+
+  try {
+    if (!newEnv.folderId) {
+      const fId = await getOrCreateFolder('[Argumentation ChatBOT] 탐구자료 공유 폴더');
+      newEnv.folderId = fId;
+      updated = true;
+    }
+  } catch (err) {
+    console.warn("Create shared folder warning:", err);
+  }
+
+  try {
+    if (!newEnv.reportFolderId) {
+      const rId = await getOrCreateFolder('[Argumentation ChatBOT] 학생보고서 저장 폴더');
+      newEnv.reportFolderId = rId;
+      updated = true;
+    }
+  } catch (err) {
+    console.warn("Create report folder warning:", err);
+  }
+
+  if (updated) {
+    await saveEnvConfig(token, spreadsheetId, newEnv);
+  }
+
+  return newEnv;
+}
+
+/**
  * Fetch Env Config
  */
 export async function fetchEnvConfig(token: string, spreadsheetId: string): Promise<EnvConfig> {
@@ -320,6 +447,7 @@ export async function saveEnvConfig(token: string, spreadsheetId: string, config
   if (!token || spreadsheetId === 'local_demo_sheet_id') return true;
 
   try {
+    await ensureSpreadsheetStructure(token, spreadsheetId);
     const url = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}/values/${encodeURIComponent('환경설정!B1:B5')}?valueInputOption=USER_ENTERED`;
     const res = await fetch(url, {
       method: 'PUT',
@@ -334,8 +462,13 @@ export async function saveEnvConfig(token: string, spreadsheetId: string, config
         ]
       })
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn("saveEnvConfig failed:", res.status, err);
+    }
     return res.ok;
   } catch (e) {
+    console.error("saveEnvConfig error:", e);
     return false;
   }
 }
@@ -388,6 +521,7 @@ export async function saveBaseConfig(token: string, spreadsheetId: string, confi
   if (!token || spreadsheetId === 'local_demo_sheet_id') return true;
 
   try {
+    await ensureSpreadsheetStructure(token, spreadsheetId);
     const url = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}/values/${encodeURIComponent('기본설정!B1:B13')}?valueInputOption=USER_ENTERED`;
     const res = await fetch(url, {
       method: 'PUT',
@@ -410,8 +544,13 @@ export async function saveBaseConfig(token: string, spreadsheetId: string, confi
         ]
       })
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn("saveBaseConfig failed:", res.status, err);
+    }
     return res.ok;
   } catch (e) {
+    console.error("saveBaseConfig error:", e);
     return false;
   }
 }
@@ -451,6 +590,7 @@ export async function saveRubricConfig(token: string, spreadsheetId: string, con
   if (!token || spreadsheetId === 'local_demo_sheet_id') return true;
 
   try {
+    await ensureSpreadsheetStructure(token, spreadsheetId);
     const url = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}/values/${encodeURIComponent('논증평가설정!B1:B4')}?valueInputOption=USER_ENTERED`;
     const res = await fetch(url, {
       method: 'PUT',
@@ -464,8 +604,13 @@ export async function saveRubricConfig(token: string, spreadsheetId: string, con
         ]
       })
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn("saveRubricConfig failed:", res.status, err);
+    }
     return res.ok;
   } catch (e) {
+    console.error("saveRubricConfig error:", e);
     return false;
   }
 }

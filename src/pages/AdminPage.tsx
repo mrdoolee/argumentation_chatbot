@@ -21,7 +21,8 @@ import {
   saveEnvConfig,
   saveBaseConfig,
   saveRubricConfig,
-  updateDashboardResults
+  updateDashboardResults,
+  ensureDriveFoldersExist
 } from '../lib/googleSheets';
 import { createDocsReport } from '../lib/googleDocs';
 import { UtteranceAnalysis } from '../types';
@@ -154,6 +155,24 @@ export const AdminPage: React.FC = () => {
       showToast('저장에 실패했습니다.', 'error');
     }
     setIsSaving(false);
+  };
+
+  const handleCreateFolders = async () => {
+    if (!authUser?.accessToken) {
+      showToast('Google 계정 로그인이 필요합니다.', 'warning');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const updatedEnv = await ensureDriveFoldersExist(authUser.accessToken, spreadsheetId, envForm);
+      setEnvForm(updatedEnv);
+      setEnvConfig(updatedEnv);
+      showToast('Google Drive에 [탐구자료 공유 폴더] 및 [학생보고서 저장 폴더]가 생성되고 ID가 연동되었습니다!', 'success');
+    } catch (err: any) {
+      showToast(`폴더 생성 실패: ${err.message}`, 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleSaveBase = async () => {
@@ -636,13 +655,24 @@ export const AdminPage: React.FC = () => {
                   Gemini API 키 및 구글 드라이브 폴더/백업 시트 ID 관리
                 </p>
               </div>
-              <button
-                onClick={handleSaveEnv}
-                disabled={isSaving}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <Save className="w-4 h-4" /> [환경설정] 저장
-              </button>
+              <div className="flex items-center gap-2">
+                {authUser && (
+                  <button
+                    onClick={handleCreateFolders}
+                    disabled={isSaving}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Drive 폴더 자동 생성/연동
+                  </button>
+                )}
+                <button
+                  onClick={handleSaveEnv}
+                  disabled={isSaving}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Save className="w-4 h-4" /> [환경설정] 저장
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">

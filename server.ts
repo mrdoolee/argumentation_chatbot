@@ -15,16 +15,9 @@ app.use(express.json({ limit: "10mb" }));
 function getGenAIClient(apiKeyOverride?: string) {
   const apiKey = apiKeyOverride?.trim() || process.env.GEMINI_API_KEY || "";
   if (!apiKey) {
-    throw new Error("Gemini API 키가 설정되지 않았습니다. [환경설정] 탭이나 서버 환경변수를 확인해주세요.");
+    throw new Error("Gemini API 키가 설정되지 않았습니다. 교사 관리자 [환경설정] 탭에서 Gemini API Key를 저장하거나 서버 환경변수를 확인해주세요.");
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
+  return new GoogleGenAI({ apiKey });
 }
 
 // ---------------------------------------------------------
@@ -88,7 +81,7 @@ app.post("/api/gemini/chat", async (req, res) => {
     });
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents,
       config: {
         systemInstruction: systemInstructionText,
@@ -156,7 +149,7 @@ app.post("/api/gemini/analyze", async (req, res) => {
     ].join("\n");
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.5-flash",
       contents: [
         {
           role: "user",
