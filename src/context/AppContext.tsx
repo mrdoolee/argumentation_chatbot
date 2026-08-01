@@ -82,6 +82,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsLoading(true);
     try {
       const token = authUser?.accessToken || '';
+      if (!token) {
+        const local = getLocalDatabase();
+        setSpreadsheetId('local_demo_sheet_id');
+        setEnvConfig(local.env);
+        setBaseConfig(local.base);
+        setRubricConfig(local.rubric);
+        setChatRecords(local.chatRecords || []);
+        return;
+      }
+
       const sheetId = await ensureSpreadsheetExists(token);
       setSpreadsheetId(sheetId);
 
@@ -96,9 +106,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBaseConfig(base);
       setRubricConfig(rubric);
       setChatRecords(records);
-    } catch (error) {
+      showToast('Google 드라이브 [Argumentation ChatBOT 데이터베이스] 연동 완료!', 'success');
+    } catch (error: any) {
       console.error('Database Sync Error:', error);
-      // Fallback local
+      const errMsg = error.message || 'Google Drive/Sheets 연동 오류가 발생했습니다.';
+      showToast(errMsg, 'error', 8000);
+      setSpreadsheetId('local_demo_sheet_id');
+
       const local = getLocalDatabase();
       setEnvConfig(local.env);
       setBaseConfig(local.base);

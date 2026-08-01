@@ -103,25 +103,31 @@ export const AdminPage: React.FC = () => {
   }, [selectedClass, selectedGroup, selectedTopic, chatRecords]);
 
   // Google Login Handler
+  const [showClientIdInput, setShowClientIdInput] = useState(false);
+
   const handleGoogleLogin = async () => {
-    const idToUse = clientId.trim();
+    const envClientId = ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '').trim();
+    const idToUse = (clientId && clientId.includes('.apps.googleusercontent.com')) ? clientId.trim() : (envClientId || clientId.trim());
+
     if (!idToUse) {
-      showToast('Google OAuth Client ID를 입력하시거나, [🚀 데모 로그인]을 클릭해 체험해보세요.', 'warning');
+      setShowClientIdInput(true);
+      showToast('Google OAuth Client ID가 필요합니다. [🚀 데모 로그인]을 선택하시면 로그인 없이 바로 체험하실 수 있습니다.', 'warning');
       return;
     }
 
     if (!idToUse.includes('.apps.googleusercontent.com')) {
-      showToast('올바른 OAuth Client ID 형식이 아닙니다. (예: 123456...apps.googleusercontent.com)', 'error');
+      setShowClientIdInput(true);
+      showToast('올바른 OAuth Client ID 형식이 아닙니다. (예: 000000-xxxx.apps.googleusercontent.com). [🚀 데모 로그인]을 눌러 즉시 체험해보세요.', 'warning');
       return;
     }
 
     try {
       const user = await requestGoogleToken(idToUse);
       setAuthUser(user);
-      showToast(`${user.name} 선생님, Google 계정 연결이 완료되었습니다.`, 'success');
+      showToast(`${user.name} 선생님, Google 계정 연동이 완료되었습니다!`, 'success');
     } catch (err: any) {
       console.error('Login error:', err);
-      showToast('Google OAuth Client ID가 유효하지 않거나 인증에 실패했습니다. [🚀 데모 로그인]을 이용하시면 로그인 없이 바로 사용하실 수 있습니다.', 'error');
+      showToast('Google 계정 연동에 실패했거나 취소되었습니다. [🚀 데모 로그인]으로도 바로 사용하실 수 있습니다.', 'error');
     }
   };
 
@@ -300,8 +306,33 @@ export const AdminPage: React.FC = () => {
                   {authUser ? 'Google OAuth 연결됨' : '데모/로컬 모드'}
                 </span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5 font-medium">
-                Google Sheets DB: <span className="font-mono text-slate-700 font-semibold">[Argumentation ChatBOT 데이터베이스]</span>
+              <p className="text-xs text-slate-500 mt-1 font-medium flex flex-wrap items-center gap-2">
+                <span>Google Sheets DB:</span>
+                {spreadsheetId && spreadsheetId !== 'local_demo_sheet_id' ? (
+                  <span className="inline-flex items-center gap-1.5 font-mono text-emerald-800 font-semibold bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 text-xs">
+                    [Argumentation ChatBOT 데이터베이스]
+                    <a
+                      href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-700 hover:text-emerald-900 hover:underline flex items-center gap-0.5 ml-1 font-sans font-bold"
+                    >
+                      <ExternalLink className="w-3 h-3" /> 시트 바로가기
+                    </a>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2 text-slate-600 font-semibold bg-amber-50 text-amber-800 px-2.5 py-1 rounded-lg border border-amber-200 text-xs">
+                    ⚠️ 드라이브 시트 미연동 (로컬 DB)
+                    {authUser && (
+                      <button
+                        onClick={() => syncDatabase()}
+                        className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded transition-colors flex items-center gap-1 cursor-pointer text-xs"
+                      >
+                        <RefreshCw className="w-3 h-3" /> 드라이브에 시트 생성/연동
+                      </button>
+                    )}
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -319,13 +350,15 @@ export const AdminPage: React.FC = () => {
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-                <input
-                  type="text"
-                  placeholder="Client ID (...apps.googleusercontent.com)"
-                  value={clientId}
-                  onChange={(e) => updateClientId(e.target.value)}
-                  className="p-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white w-full sm:w-64 focus:border-indigo-600 outline-none"
-                />
+                {showClientIdInput && (
+                  <input
+                    type="text"
+                    placeholder="Client ID (...apps.googleusercontent.com)"
+                    value={clientId}
+                    onChange={(e) => updateClientId(e.target.value)}
+                    className="p-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white w-full sm:w-64 focus:border-indigo-600 outline-none"
+                  />
+                )}
                 <button
                   onClick={handleGoogleLogin}
                   className="px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
@@ -339,6 +372,15 @@ export const AdminPage: React.FC = () => {
                 >
                   🚀 데모 로그인
                 </button>
+                {!showClientIdInput && (
+                  <button
+                    onClick={() => setShowClientIdInput(true)}
+                    className="p-2 text-slate-400 hover:text-slate-600 text-xs rounded-lg transition-colors"
+                    title="Client ID 수동 입력"
+                  >
+                    ⚙️
+                  </button>
+                )}
               </div>
             )}
 

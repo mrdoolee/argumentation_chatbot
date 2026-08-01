@@ -114,34 +114,49 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
     return getLocalDatabase().spreadsheetId;
   }
 
+  // 1. Search for existing spreadsheet file in Google Drive
+  const qStr = encodeURIComponent(`name = '${DATABASE_FILENAME}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`);
+  const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${qStr}&fields=files(id,name)`;
+
+  let searchRes: Response;
   try {
-    // 1. Search for existing spreadsheet file
-    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(DATABASE_FILENAME)}' and trashed=false&fields=files(id, name)`;
-    const searchRes = await fetch(searchUrl, {
+    searchRes = await fetch(searchUrl, {
       headers: { Authorization: `Bearer ${token}` }
     });
+  } catch (netErr: any) {
+    throw new Error(`Google Drive 네트워크 연결 실패: ${netErr.message}`);
+  }
 
-    if (searchRes.ok) {
-      const searchData = await searchRes.json();
-      if (searchData.files && searchData.files.length > 0) {
-        return searchData.files[0].id;
-      }
+  if (searchRes.ok) {
+    const searchData = await searchRes.json();
+    if (searchData.files && searchData.files.length > 0) {
+      return searchData.files[0].id;
     }
+  } else {
+    const errJson = await searchRes.json().catch(() => ({}));
+    const errMsg = errJson.error?.message || searchRes.statusText;
+    console.warn("Drive search error:", searchRes.status, errMsg);
+    if (searchRes.status === 403 && (errMsg.includes('disabled') || errMsg.includes('has not been used'))) {
+      throw new Error(`Google Drive API가 구글 클라우드 콘솔에서 활성화(Enable)되지 않았습니다. Google Cloud Console > 라이브러리에서 'Google Drive API'를 사용 설정해주세요.`);
+    }
+  }
 
-    // 2. File not found -> Create new spreadsheet with 5 tabs
-    const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
-    const payload = {
-      properties: { title: DATABASE_FILENAME },
-      sheets: [
-        { properties: { title: '환경설정' } },
-        { properties: { title: '기본설정' } },
-        { properties: { title: '채팅기록' } },
-        { properties: { title: '논증평가설정' } },
-        { properties: { title: '대시보드' } }
-      ]
-    };
+  // 2. File not found -> Create new spreadsheet with 5 tabs
+  const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
+  const payload = {
+    properties: { title: DATABASE_FILENAME },
+    sheets: [
+      { properties: { title: '환경설정' } },
+      { properties: { title: '기본설정' } },
+      { properties: { title: '채팅기록' } },
+      { properties: { title: '논증평가설정' } },
+      { properties: { title: '대시보드' } }
+    ]
+  };
 
-    const createRes = await fetch(createUrl, {
+  let createRes: Response;
+  try {
+    createRes = await fetch(createUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -149,22 +164,26 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
       },
       body: JSON.stringify(payload)
     });
-
-    if (!createRes.ok) {
-      throw new Error(`Failed to create spreadsheet: ${createRes.statusText}`);
-    }
-
-    const newSheet = await createRes.json();
-    const spreadsheetId = newSheet.spreadsheetId;
-
-    // 3. Populate default values for the 5 tabs
-    await initializeSpreadsheetTabs(token, spreadsheetId);
-
-    return spreadsheetId;
-  } catch (err) {
-    console.warn("Google Sheets API error, falling back to local DB mode:", err);
-    return getLocalDatabase().spreadsheetId;
+  } catch (netErr: any) {
+    throw new Error(`Google Sheets 생성 네트워크 오류: ${netErr.message}`);
   }
+
+  if (!createRes.ok) {
+    const errJson = await createRes.json().catch(() => ({}));
+    const errMsg = errJson.error?.message || createRes.statusText;
+    if (createRes.status === 403) {
+      throw new Error(`Google Sheets API 권한 오류(403): ${errMsg}. 구글 클라우드 콘솔 > 라이브러리에서 'Google Sheets API'를 사용 설정(Enable)했는지 확인해주세요.`);
+    }
+    throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
+  }
+
+  const newSheet = await createRes.json();
+  const spreadsheetId = newSheet.spreadsheetId;
+
+  // 3. Populate default values for the 5 tabs
+  await initializeSpreadsheetTabs(token, spreadsheetId);
+
+  return spreadsheetId;
 }
 
 async function initializeSpreadsheetTabs(token: string, spreadsheetId: string) {

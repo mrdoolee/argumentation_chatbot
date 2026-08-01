@@ -39,7 +39,22 @@ export function removeAuthUser() {
 }
 
 export function getStoredClientId(): string {
-  return localStorage.getItem(DEFAULT_CLIENT_ID_KEY) || (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
+  const envId = ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '').trim();
+  if (envId && envId.includes('.apps.googleusercontent.com')) {
+    return envId;
+  }
+  
+  const stored = (localStorage.getItem(DEFAULT_CLIENT_ID_KEY) || '').trim();
+  if (stored && stored.includes('.apps.googleusercontent.com')) {
+    return stored;
+  }
+
+  // Clear bad local storage data
+  if (stored && !stored.includes('.apps.googleusercontent.com')) {
+    localStorage.removeItem(DEFAULT_CLIENT_ID_KEY);
+  }
+
+  return envId || stored || '';
 }
 
 export function saveStoredClientId(clientId: string) {
