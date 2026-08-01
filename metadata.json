@@ -1,0 +1,6 @@
+{
+  "name": "Argumentation ChatBOT",
+  "description": "과학탐구 툴민 논증 분석 AI 챗봇 에듀테크 웹앱 (교사용 관리자 / 학생용 탐구)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
