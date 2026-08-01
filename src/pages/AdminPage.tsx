@@ -110,13 +110,18 @@ export const AdminPage: React.FC = () => {
       return;
     }
 
+    if (!idToUse.includes('.apps.googleusercontent.com')) {
+      showToast('올바른 OAuth Client ID 형식이 아닙니다. (예: 123456...apps.googleusercontent.com)', 'error');
+      return;
+    }
+
     try {
       const user = await requestGoogleToken(idToUse);
       setAuthUser(user);
       showToast(`${user.name} 선생님, Google 계정 연결이 완료되었습니다.`, 'success');
     } catch (err: any) {
       console.error('Login error:', err);
-      showToast('Google OAuth Client ID가 유효하지 않습니다. [🚀 데모 로그인]을 이용하시면 로그인 없이 바로 사용하실 수 있습니다.', 'error');
+      showToast('Google OAuth Client ID가 유효하지 않거나 인증에 실패했습니다. [🚀 데모 로그인]을 이용하시면 로그인 없이 바로 사용하실 수 있습니다.', 'error');
     }
   };
 
@@ -316,10 +321,10 @@ export const AdminPage: React.FC = () => {
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
                 <input
                   type="text"
-                  placeholder="Google OAuth Client ID (선택)"
+                  placeholder="Client ID (...apps.googleusercontent.com)"
                   value={clientId}
                   onChange={(e) => updateClientId(e.target.value)}
-                  className="p-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white w-full sm:w-56 focus:border-indigo-600 outline-none"
+                  className="p-2.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white w-full sm:w-64 focus:border-indigo-600 outline-none"
                 />
                 <button
                   onClick={handleGoogleLogin}
