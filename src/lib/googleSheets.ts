@@ -124,7 +124,7 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
       headers: { Authorization: `Bearer ${token}` }
     });
   } catch (netErr: any) {
-    throw new Error(`Google Drive 네트워크 연결 실패: ${netErr.message}`);
+    throw new Error(`Google API 연결 실패 (${netErr.message || 'Failed to fetch'}). 구글 로그인 토큰이 만료되었거나 브라우저 광고 차단기(uBlock, Brave Shields 등)가 구글 API 통신을 차단하고 있을 수 있습니다. [Google 로그인]을 다시 클릭하시거나 광고 차단을 해제 후 시도해 주세요.`);
   }
 
   if (searchRes.ok) {
@@ -136,102 +136,56 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
     const errJson = await searchRes.json().catch(() => ({}));
     const errMsg = errJson.error?.message || searchRes.statusText;
     console.warn("Drive search error:", searchRes.status, errMsg);
+    if (searchRes.status === 401) {
+      throw new Error(`구글 로그인 인증 토큰이 만료되었습니다. 상단의 [Google 로그인] 버튼을 클릭해 인증을 갱신해 주세요.`);
+    }
     if (searchRes.status === 403 && (errMsg.includes('disabled') || errMsg.includes('has not been used'))) {
-      throw new Error(`Google Drive API가 구글 클라우드 콘솔에서 활성화(Enable)되지 않았습니다. Google Cloud Console > 라이브러리에서 'Google Drive API'를 사용 설정해주세요.`);
+      throw new Error(`Google Drive API가 구글 클라우드 콘솔에서 활성화(Enable)되지 않았습니다. Cloud Console에서 'Google Drive API'를 사용 설정해 주세요.`);
     }
   }
 
-  // 2. File not found -> Try creating via Drive API or Sheets API
-  let spreadsheetId = '';
-  
-  // Try Drive API creation first (mimeType: application/vnd.google-apps.spreadsheet)
-  const driveCreateUrl = 'https://www.googleapis.com/drive/v3/files';
+  // 2. File not found -> Create new spreadsheet via Sheets API v4
+  const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
+  const payload = {
+    properties: { title: DATABASE_FILENAME }
+  };
+
+  let createRes: Response;
   try {
-    const driveRes = await fetch(driveCreateUrl, {
+    createRes = await fetch(createUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        name: DATABASE_FILENAME,
-        mimeType: 'application/vnd.google-apps.spreadsheet'
-      })
+      body: JSON.stringify(payload)
     });
-
-    if (driveRes.ok) {
-      const driveData = await driveRes.json();
-      spreadsheetId = driveData.id;
-    } else {
-      const errJson = await driveRes.json().catch(() => ({}));
-      const errMsg = errJson.error?.message || driveRes.statusText || '';
-      console.warn("Drive API create file failed:", driveRes.status, errMsg);
-      
-      if (errMsg.includes('disabled') || errMsg.includes('has not been used') || errMsg.includes('FAILED_PRECONDITION')) {
-        throw new Error(`구글 클라우드 콘솔(Google Cloud Console)에서 'Google Drive API'가 사용 설정(Enable)되지 않았습니다. Console > API 및 서비스 > 라이브러리에서 'Google Drive API'를 사용 설정해 주세요.`);
-      }
-    }
-  } catch (driveErr: any) {
-    if (driveErr.message?.includes('Google Drive API')) {
-      throw driveErr;
-    }
-    console.warn("Drive API creation error, trying Sheets API:", driveErr);
+  } catch (netErr: any) {
+    throw new Error(`Google Sheets 생성 통신 실패 (${netErr.message || 'Failed to fetch'}). 인증 토큰이 만료되었거나 네트워크/광고차단기 차단 여부를 확인해 주세요.`);
   }
 
-  // If Drive API didn't return an ID, try Sheets API
-  if (!spreadsheetId) {
-    const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
-    const payload = {
-      properties: { title: DATABASE_FILENAME },
-      sheets: [
-        { properties: { title: '환경설정' } },
-        { properties: { title: '기본설정' } },
-        { properties: { title: '채팅기록' } },
-        { properties: { title: '논증평가설정' } },
-        { properties: { title: '대시보드' } }
-      ]
-    };
+  if (!createRes.ok) {
+    const errJson = await createRes.json().catch(() => ({}));
+    const errMsg = errJson.error?.message || errJson.message || createRes.statusText || '알 수 없는 오류';
 
-    let createRes: Response;
-    try {
-      createRes = await fetch(createUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-    } catch (netErr: any) {
-      throw new Error(`Google Sheets 네트워크 연결 실패: ${netErr.message}`);
+    if (createRes.status === 401) {
+      throw new Error(`구글 로그인 인증 토큰이 만료되었습니다. [Google 로그인] 버튼을 다시 눌러 로그인 후 시도해 주세요.`);
     }
-
-    if (!createRes.ok) {
-      const errJson = await createRes.json().catch(() => ({}));
-      const errMsg = errJson.error?.message || errJson.message || createRes.statusText || '알 수 없는 오류';
-      
-      if (createRes.status === 400 || createRes.status === 403) {
-        if (errMsg.includes('disabled') || errMsg.includes('has not been used') || errMsg.includes('FAILED_PRECONDITION')) {
-          throw new Error(`구글 클라우드 콘솔에서 'Google Sheets API'가 사용 설정(Enable)되지 않았습니다. Google Cloud Console > API 및 서비스 > 라이브러리에서 'Google Sheets API'를 사용 설정(Enable)해 주세요.`);
-        }
-      }
-      throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
+    if (createRes.status === 403) {
+      throw new Error(`Google Sheets API 권한 오류(403): ${errMsg}. Google Cloud Console에서 'Google Sheets API'가 사용 설정(Enable)되었는지 확인해 주세요.`);
     }
-
-    const newSheet = await createRes.json();
-    spreadsheetId = newSheet.spreadsheetId;
+    throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
   }
 
-  // 3. Populate default values for the 5 tabs
+  const newSheet = await createRes.json();
+  const spreadsheetId = newSheet.spreadsheetId;
+
+  // 3. Populate default tabs and initial values
   if (spreadsheetId) {
     try {
       await initializeSpreadsheetTabs(token, spreadsheetId);
     } catch (tabErr: any) {
-      console.warn("Initialize tabs error:", tabErr);
-      // If Sheets API is disabled when populating tabs
-      if (tabErr.message?.includes('disabled') || tabErr.message?.includes('has not been used')) {
-        throw new Error(`시트 파일은 생성되었으나 'Google Sheets API'가 사용 설정(Enable)되지 않아 데이터 초기화에 실패했습니다. Google Cloud Console > 라이브러리에서 'Google Sheets API'를 사용 설정해 주세요.`);
-      }
+      console.warn("Initialize tabs warning:", tabErr);
     }
   }
 
@@ -239,6 +193,30 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
 }
 
 async function initializeSpreadsheetTabs(token: string, spreadsheetId: string) {
+  // 1. Add required sheets
+  const addSheetsUrl = `https://sheets.googleapis.com/v1/spreadsheets/${spreadsheetId}:batchUpdate`;
+  try {
+    await fetch(addSheetsUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        requests: [
+          { addSheet: { properties: { title: '환경설정' } } },
+          { addSheet: { properties: { title: '기본설정' } } },
+          { addSheet: { properties: { title: '채팅기록' } } },
+          { addSheet: { properties: { title: '논증평가설정' } } },
+          { addSheet: { properties: { title: '대시보드' } } }
+        ]
+      })
+    });
+  } catch (e) {
+    console.warn("Add sheets batchUpdate warning:", e);
+  }
+
+  // 2. Populate initial values
   const envData = [
     ['Gemini API Key', DEFAULT_ENV_CONFIG.geminiApiKey],
     ['자료 공유 폴더 ID', DEFAULT_ENV_CONFIG.folderId],
@@ -276,7 +254,7 @@ async function initializeSpreadsheetTabs(token: string, spreadsheetId: string) {
 
   const dashboardHeader = [
     ['🎯 모둠별 논증 발화 조회 및 툴민 논증 분석 대시보드', '', '', '', '', ''],
-    ['학급 선택:', '7반', '모둠 선택:', 'A2모둠', '주제 선택:', '온도와 반응 속도'],
+    ['학급 선택:', '1반', '모둠 선택:', 'A1모둠', '주제 선택:', '온도와 반응 속도'],
     ['', '', '', '', '', ''],
     ['', '', '', '', '', ''],
     ['', '', '', '', '', ''],
