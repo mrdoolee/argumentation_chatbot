@@ -141,47 +141,99 @@ export async function ensureSpreadsheetExists(token: string): Promise<string> {
     }
   }
 
-  // 2. File not found -> Create new spreadsheet with 5 tabs
-  const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
-  const payload = {
-    properties: { title: DATABASE_FILENAME },
-    sheets: [
-      { properties: { title: '환경설정' } },
-      { properties: { title: '기본설정' } },
-      { properties: { title: '채팅기록' } },
-      { properties: { title: '논증평가설정' } },
-      { properties: { title: '대시보드' } }
-    ]
-  };
-
-  let createRes: Response;
+  // 2. File not found -> Try creating via Drive API or Sheets API
+  let spreadsheetId = '';
+  
+  // Try Drive API creation first (mimeType: application/vnd.google-apps.spreadsheet)
+  const driveCreateUrl = 'https://www.googleapis.com/drive/v3/files';
   try {
-    createRes = await fetch(createUrl, {
+    const driveRes = await fetch(driveCreateUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        name: DATABASE_FILENAME,
+        mimeType: 'application/vnd.google-apps.spreadsheet'
+      })
     });
-  } catch (netErr: any) {
-    throw new Error(`Google Sheets 생성 네트워크 오류: ${netErr.message}`);
-  }
 
-  if (!createRes.ok) {
-    const errJson = await createRes.json().catch(() => ({}));
-    const errMsg = errJson.error?.message || createRes.statusText;
-    if (createRes.status === 403) {
-      throw new Error(`Google Sheets API 권한 오류(403): ${errMsg}. 구글 클라우드 콘솔 > 라이브러리에서 'Google Sheets API'를 사용 설정(Enable)했는지 확인해주세요.`);
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      spreadsheetId = driveData.id;
+    } else {
+      const errJson = await driveRes.json().catch(() => ({}));
+      const errMsg = errJson.error?.message || driveRes.statusText || '';
+      console.warn("Drive API create file failed:", driveRes.status, errMsg);
+      
+      if (errMsg.includes('disabled') || errMsg.includes('has not been used') || errMsg.includes('FAILED_PRECONDITION')) {
+        throw new Error(`구글 클라우드 콘솔(Google Cloud Console)에서 'Google Drive API'가 사용 설정(Enable)되지 않았습니다. Console > API 및 서비스 > 라이브러리에서 'Google Drive API'를 사용 설정해 주세요.`);
+      }
     }
-    throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
+  } catch (driveErr: any) {
+    if (driveErr.message?.includes('Google Drive API')) {
+      throw driveErr;
+    }
+    console.warn("Drive API creation error, trying Sheets API:", driveErr);
   }
 
-  const newSheet = await createRes.json();
-  const spreadsheetId = newSheet.spreadsheetId;
+  // If Drive API didn't return an ID, try Sheets API
+  if (!spreadsheetId) {
+    const createUrl = 'https://sheets.googleapis.com/v1/spreadsheets';
+    const payload = {
+      properties: { title: DATABASE_FILENAME },
+      sheets: [
+        { properties: { title: '환경설정' } },
+        { properties: { title: '기본설정' } },
+        { properties: { title: '채팅기록' } },
+        { properties: { title: '논증평가설정' } },
+        { properties: { title: '대시보드' } }
+      ]
+    };
+
+    let createRes: Response;
+    try {
+      createRes = await fetch(createUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (netErr: any) {
+      throw new Error(`Google Sheets 네트워크 연결 실패: ${netErr.message}`);
+    }
+
+    if (!createRes.ok) {
+      const errJson = await createRes.json().catch(() => ({}));
+      const errMsg = errJson.error?.message || errJson.message || createRes.statusText || '알 수 없는 오류';
+      
+      if (createRes.status === 400 || createRes.status === 403) {
+        if (errMsg.includes('disabled') || errMsg.includes('has not been used') || errMsg.includes('FAILED_PRECONDITION')) {
+          throw new Error(`구글 클라우드 콘솔에서 'Google Sheets API'가 사용 설정(Enable)되지 않았습니다. Google Cloud Console > API 및 서비스 > 라이브러리에서 'Google Sheets API'를 사용 설정(Enable)해 주세요.`);
+        }
+      }
+      throw new Error(`구글 시트 생성 실패 (${createRes.status}): ${errMsg}`);
+    }
+
+    const newSheet = await createRes.json();
+    spreadsheetId = newSheet.spreadsheetId;
+  }
 
   // 3. Populate default values for the 5 tabs
-  await initializeSpreadsheetTabs(token, spreadsheetId);
+  if (spreadsheetId) {
+    try {
+      await initializeSpreadsheetTabs(token, spreadsheetId);
+    } catch (tabErr: any) {
+      console.warn("Initialize tabs error:", tabErr);
+      // If Sheets API is disabled when populating tabs
+      if (tabErr.message?.includes('disabled') || tabErr.message?.includes('has not been used')) {
+        throw new Error(`시트 파일은 생성되었으나 'Google Sheets API'가 사용 설정(Enable)되지 않아 데이터 초기화에 실패했습니다. Google Cloud Console > 라이브러리에서 'Google Sheets API'를 사용 설정해 주세요.`);
+      }
+    }
+  }
 
   return spreadsheetId;
 }
